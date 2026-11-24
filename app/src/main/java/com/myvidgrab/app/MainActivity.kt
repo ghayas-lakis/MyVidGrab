@@ -45,7 +45,7 @@ class MainActivity : Activity() {
         })
         address = EditText(this).apply {
             hint = "Paste a video page or URL"
-            singleLine = true
+            isSingleLine = true
             textSize = 14f
             setTextColor(-1)
             setHintTextColor(0xFF9EAEB9.toInt())
