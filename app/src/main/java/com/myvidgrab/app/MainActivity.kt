@@ -323,9 +323,17 @@ class MainActivity : Activity() {
                     });
                   });
                   document.querySelectorAll('a[href]').forEach(function(a) {
-                    if (/.(mp4|webm|ogv|mov)(?|#|$)/i.test(a.href))
+                    if (/\\.(mp4|webm|ogv|mov)(?:[?#]|$)/i.test(a.href))
                       report(a.href, 0, 0, a.type || '');
                   });
+                  // Some players create media requests without adding a <video src>.
+                  // Resource timing can expose direct media URLs requested by the page.
+                  if (window.performance && performance.getEntriesByType) {
+                    performance.getEntriesByType('resource').forEach(function(entry) {
+                      if (/\\.(mp4|webm|ogv|mov)(?:[?#]|$)/i.test(entry.name))
+                        report(entry.name, 0, 0, '');
+                    });
+                  }
                 } catch(e) {}
               }
               scan();
