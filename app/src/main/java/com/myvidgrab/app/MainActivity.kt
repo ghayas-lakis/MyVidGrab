@@ -5,6 +5,9 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -16,6 +19,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -23,13 +27,17 @@ import java.net.URLDecoder
 import java.util.Locale
 
 class MainActivity : Activity() {
-    private data class VideoSource(val url: String, val width: Int, val height: Int, val mime: String)
+    private data class VideoSource(val url: String, val width: Int, val height: Int, val mime: String, val title: String, val durationSec: Double, val estimatedBytes: Long)
+    private data class DownloadTask(val id: Long, val title: String, var downloaded: Long = 0L, var total: Long = -1L, var speed: Long = 0L, var lastBytes: Long = 0L, var lastTime: Long = 0L, var status: String = "Queued")
     private lateinit var browser: WebView
     private lateinit var address: EditText
     private lateinit var content: LinearLayout
     private lateinit var browserPanel: LinearLayout
     private lateinit var detectedCount: TextView
     private val found = linkedMapOf<String, VideoSource>()
+    private val downloads = linkedMapOf<Long, DownloadTask>()
+    private val progressHandler = Handler(Looper.getMainLooper())
+    private val progressPoll = object : Runnable { override fun run() { refreshDownloadProgress(); progressHandler.postDelayed(this, 1000L) } }
     private var privateMode = true
     private var showingBrowser = false
 
@@ -44,6 +52,7 @@ class MainActivity : Activity() {
         buildScreen()
         configureBrowser()
         showHome()
+        progressHandler.post(progressPoll)
     }
 
     private fun buildScreen() {
@@ -217,7 +226,8 @@ class MainActivity : Activity() {
                 "${source.height}p  •  ${source.width} × ${source.height}"
             else "Quality not reported by page"
             card.addView(TextView(this).apply {
-                text = "VIDEO ${index + 1}"
+                text = source.title.ifBlank { "VIDEO ${index + 1}" }
+                maxLines = 2
                 textSize = 11f
                 setTextColor(accent)
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -229,7 +239,7 @@ class MainActivity : Activity() {
                 setPadding(0, dp(5), 0, dp(3))
             })
             card.addView(TextView(this).apply {
-                text = source.mime.ifBlank { fileType(source.url) } + "  •  " + shortUrl(source.url)
+                text = source.mime.ifBlank { fileType(source.url) } + "  •  " + formatDuration(source.durationSec) + "  •  " + formatBytes(source.estimatedBytes) + "\n" + shortUrl(source.url)
                 textSize = 11f
                 setTextColor(muted)
             })
@@ -306,32 +316,38 @@ class MainActivity : Activity() {
               if (window.__mvgObserver) return;
               window.__mvgObserver = true;
               const seen = new Set();
-              function report(url, w, h, mime) {
-                if (!url || !/^https?:/i.test(url) || seen.has(url)) return;
-                seen.add(url);
-                try { MyVidGrab.found(url, w || 0, h || 0, mime || ''); } catch(e) {}
+              function report(url, w, h, mime, title, duration) {
+                if (!url || !/^https?:/i.test(url)) return;
+                let size = 0;
+                try {
+                  const entries = performance.getEntriesByName(url);
+                  if (entries.length) size = entries[entries.length - 1].encodedBodySize || entries[entries.length - 1].transferSize || 0;
+                } catch(e) {}
+                try { MyVidGrab.found(url, w || 0, h || 0, mime || '', title || document.title || '', duration || 0, size || 0); } catch(e) {}
               }
               function scan() {
                 try {
                   document.querySelectorAll('video').forEach(function(v) {
                     const w = v.videoWidth || v.width || 0;
                     const h = v.videoHeight || v.height || 0;
-                    if (v.currentSrc) report(v.currentSrc, w, h, v.getAttribute('type') || '');
-                    if (v.src) report(v.src, w, h, v.getAttribute('type') || '');
+                    const d = isFinite(v.duration) ? v.duration : 0;
+                    const title = v.getAttribute('aria-label') || v.getAttribute('title') || document.title || '';
+                    if (v.currentSrc) report(v.currentSrc, w, h, v.getAttribute('type') || '', title, d);
+                    if (v.src) report(v.src, w, h, v.getAttribute('type') || '', title, d);
                     v.querySelectorAll('source').forEach(function(s) {
-                      report(s.src, w, h, s.type || '');
+                      report(s.src, w, h, s.type || '', title, d);
                     });
                   });
                   document.querySelectorAll('a[href]').forEach(function(a) {
                     if (/[.](mp4|webm|ogv|mov)(?:[?#]|$)/i.test(a.href))
-                      report(a.href, 0, 0, a.type || '');
+                      report(a.href, 0, 0, a.type || '', document.title || '', 0);
                   });
                   // Some players create media requests without adding a <video src>.
                   // Resource timing can expose direct media URLs requested by the page.
                   if (window.performance && performance.getEntriesByType) {
                     performance.getEntriesByType('resource').forEach(function(entry) {
                       if (/[.](mp4|webm|ogv|mov)(?:[?#]|$)/i.test(entry.name))
-                        report(entry.name, 0, 0, '');
+                        report(entry.name, 0, 0, '', document.title || '', 0);
                     });
                   }
                 } catch(e) {}
@@ -347,13 +363,22 @@ class MainActivity : Activity() {
 
     inner class VideoBridge {
         @JavascriptInterface
-        fun found(url: String, width: Int, height: Int, mime: String) {
+        fun found(url: String, width: Int, height: Int, mime: String, title: String, duration: Double, estimatedBytes: Long) {
             runOnUiThread {
-                if ((url.startsWith("https://") || url.startsWith("http://")) && !found.containsKey(url)) {
-                    found[url] = VideoSource(url, width, height, mime)
+                if (url.startsWith("https://") || url.startsWith("http://")) {
+                    val previous = found[url]
+                    val cleanedTitle = title.trim().take(140)
+                    val next = VideoSource(url, width, height, mime, cleanedTitle, duration, estimatedBytes)
+                    found[url] = if (previous == null) next else next.copy(
+                        width = if (width > 0) width else previous.width,
+                        height = if (height > 0) height else previous.height,
+                        mime = mime.ifBlank { previous.mime },
+                        title = cleanedTitle.ifBlank { previous.title },
+                        durationSec = if (duration > 0) duration else previous.durationSec,
+                        estimatedBytes = if (estimatedBytes > 0) estimatedBytes else previous.estimatedBytes
+                    )
                     detectedCount.text = "${found.size} VIDEOS"
                     if (!showingBrowser) showVideos()
-                    Toast.makeText(this@MainActivity, "Video detected — open VIDEOS to download", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -374,8 +399,10 @@ class MainActivity : Activity() {
             val name = safeFileName(uri.lastPathSegment ?: "myvidgrab_video.mp4")
             request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name)
             val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            manager.enqueue(request)
-            Toast.makeText(this, "Download started. Check Downloads for progress.", Toast.LENGTH_LONG).show()
+            val downloadId = manager.enqueue(request)
+            val taskTitle = source.title.ifBlank { name }
+            downloads[downloadId] = DownloadTask(downloadId, taskTitle, lastTime = SystemClock.elapsedRealtime())
+            Toast.makeText(this, "Download started — progress is available in Downloads.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Could not start download: ${e.localizedMessage ?: "unsupported source"}", Toast.LENGTH_LONG).show()
         }
@@ -392,11 +419,79 @@ class MainActivity : Activity() {
         content.visibility = View.VISIBLE
         content.removeAllViews()
         content.addView(heading("Your downloads"))
-        content.addView(body("Android Download Manager handles the transfer and shows progress and completion notifications. Files are saved in your device's Downloads folder."))
+        content.addView(body("Live progress, transfer speed and estimated time remaining are shown below. Total size and ETA appear when Android's download service reports them."))
+        if (downloads.isEmpty()) content.addView(emptyState("No downloads started yet", "Start a download from the Videos tab."))
+        downloads.values.toList().asReversed().forEach { task ->
+            val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); setBackgroundColor(panel) }
+            card.addView(TextView(this).apply { text = task.title; textSize = 15f; setTextColor(white); maxLines = 2 })
+            val percent = if (task.total > 0) ((task.downloaded * 100L) / task.total).toInt().coerceIn(0, 100) else 0
+            card.addView(TextView(this).apply { text = "${formatBytes(task.downloaded)} / ${formatBytes(task.total)}   •   $percent%"; textSize = 12f; setTextColor(muted); setPadding(0, dp(7), 0, dp(4)) })
+            card.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; progress = percent })
+            card.addView(TextView(this).apply { text = "${formatBytes(task.speed)}/s   •   ETA: ${formatEta(task)}   •   ${task.status}"; textSize = 12f; setTextColor(accent); setPadding(0, dp(5), 0, 0) })
+            content.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+        }
+        content.addView(actionButton("OPEN ANDROID DOWNLOADS") { try { startActivity(android.content.Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)) } catch (_: Exception) { Toast.makeText(this, "Open the Downloads app on your device.", Toast.LENGTH_SHORT).show() } })
         content.addView(actionButton("OPEN DOWNLOAD MANAGER") {
             try { startActivity(android.content.Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)) }
             catch (_: Exception) { Toast.makeText(this, "Open the Downloads app on your device.", Toast.LENGTH_SHORT).show() }
         })
+    }
+
+    private fun refreshDownloadProgress() {
+        if (downloads.isEmpty()) return
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val now = SystemClock.elapsedRealtime()
+        downloads.values.forEach { task ->
+            try {
+                val cursor = manager.query(DownloadManager.Query().setFilterById(task.id)) ?: return@forEach
+                cursor.use {
+                    if (it.moveToFirst()) {
+                        val bytesCol = it.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                        val totalCol = it.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                        val statusCol = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        val bytes = if (bytesCol >= 0) it.getLong(bytesCol) else 0L
+                        val total = if (totalCol >= 0) it.getLong(totalCol) else -1L
+                        val status = if (statusCol >= 0) it.getInt(statusCol) else -1
+                        val elapsed = (now - task.lastTime).coerceAtLeast(1L)
+                        if (bytes >= task.lastBytes) task.speed = ((bytes - task.lastBytes) * 1000L / elapsed).coerceAtLeast(0L)
+                        task.downloaded = bytes
+                        task.total = total
+                        task.lastBytes = bytes
+                        task.lastTime = now
+                        task.status = when (status) {
+                            DownloadManager.STATUS_PENDING -> "Queued"
+                            DownloadManager.STATUS_RUNNING -> "Downloading"
+                            DownloadManager.STATUS_PAUSED -> "Paused"
+                            DownloadManager.STATUS_SUCCESSFUL -> "Completed"
+                            DownloadManager.STATUS_FAILED -> "Failed"
+                            else -> "Waiting"
+                        }
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+        if (!showingBrowser && content.childCount > 0 && content.getChildAt(0) is TextView && (content.getChildAt(0) as TextView).text.toString() == "Your downloads") showDownloads()
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 0) return "Size unknown"
+        if (bytes == 0L) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB")
+        var value = bytes.toDouble(); var unit = 0
+        while (value >= 1024 && unit < units.lastIndex) { value /= 1024; unit++ }
+        return String.format(Locale.US, "%.1f %s", value, units[unit])
+    }
+
+    private fun formatDuration(seconds: Double): String {
+        if (!seconds.isFinite() || seconds <= 0) return "Duration unknown"
+        val s = seconds.toInt(); return String.format(Locale.US, "%d:%02d", s / 60, s % 60)
+    }
+
+    private fun formatEta(task: DownloadTask): String {
+        if (task.total <= 0 || task.speed <= 0) return "—"
+        val seconds = ((task.total - task.downloaded).coerceAtLeast(0) / task.speed).toInt()
+        return if (seconds >= 3600) String.format(Locale.US, "%dh %02dm", seconds / 3600, (seconds % 3600) / 60)
+        else String.format(Locale.US, "%dm %02ds", seconds / 60, seconds % 60)
     }
 
     private fun togglePrivate() {
@@ -419,6 +514,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        progressHandler.removeCallbacks(progressPoll)
         if (::browser.isInitialized) {
             browser.stopLoading()
             browser.removeJavascriptInterface("MyVidGrab")
