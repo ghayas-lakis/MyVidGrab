@@ -41,11 +41,12 @@ class MainActivity : Activity() {
     private var privateMode = true
     private var showingBrowser = false
 
-    private val bg = 0xFF0B1220.toInt()
-    private val panel = 0xFF172235.toInt()
-    private val muted = 0xFF9AAAC0.toInt()
-    private val accent = 0xFF27D3B2.toInt()
-    private val white = 0xFFF4F7FB.toInt()
+    private val bg = 0xFFFFFFFF.toInt()
+    private val panel = 0xFFF5F5F5.toInt()
+    private val muted = 0xFF777777.toInt()
+    private val accent = 0xFFFFB900.toInt()
+    private val white = 0xFF28221D.toInt()
+    private val orange = 0xFFFF8A00.toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,7 +67,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(TextView(this).apply {
-            text = "MYVIDGRAB"
+            text = "Downloader"
             textSize = 22f
             letterSpacing = 0.08f
             setTextColor(accent)
@@ -75,21 +76,21 @@ class MainActivity : Activity() {
         detectedCount = TextView(this).apply {
             text = "0 VIDEOS"
             textSize = 11f
-            setTextColor(accent)
+            setTextColor(orange)
             setPadding(dp(10), dp(7), dp(10), dp(7))
-            setBackgroundColor(panel)
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(0xFFFFF3D2.toInt()); cornerRadius = dp(20).toFloat() }
         }
         header.addView(detectedCount)
         root.addView(header)
 
         address = EditText(this).apply {
-            hint = "Paste a video page URL"
+            hint = "Search or Enter URL"
             isSingleLine = true
             textSize = 14f
             setTextColor(white)
             setHintTextColor(muted)
             setPadding(dp(14), 0, dp(14), 0)
-            setBackgroundColor(panel)
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(panel); cornerRadius = dp(40).toFloat() }
             setSelectAllOnFocus(false)
             setOnEditorActionListener { _, _, _ -> openAddress(); true }
         }
@@ -181,18 +182,44 @@ class MainActivity : Activity() {
         browserPanel.visibility = View.GONE
         content.visibility = View.VISIBLE
         content.removeAllViews()
-        content.addView(heading("Your videos, ready to save"))
-        content.addView(body("Browse to a page with a video. When MyVidGrab finds a downloadable video source, it will appear in Videos with its available quality and a Download button."))
-        content.addView(actionButton("OPEN BROWSER") {
-            if (browser.url == null) browser.loadUrl("https://www.google.com")
-            showBrowser()
-        })
-        content.addView(sectionTitle("DETECTED VIDEOS"))
-        addVideoCards(content)
-        content.addView(body("Only direct video sources and quality variants exposed by the page can be listed. Protected or segmented streams may not be downloadable here."))
+        val promo = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(0xFFFFB900.toInt()); cornerRadius = dp(22).toFloat() }
+        }
+        promo.addView(TextView(this).apply { text = "⬇"; textSize = 28f; setTextColor(white); setPadding(0, 0, dp(14), 0) })
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(TextView(this).apply { text = "PRIVATE BROWSING"; textSize = 11f; setTextColor(white) })
+        copy.addView(TextView(this).apply { text = "Save videos in a few taps"; textSize = 16f; setTextColor(white); typeface = android.graphics.Typeface.DEFAULT_BOLD })
+        promo.addView(copy)
+        content.addView(promo, LinearLayout.LayoutParams(-1, dp(76)).apply { topMargin = dp(14); bottomMargin = dp(24) })
+        content.addView(TextView(this).apply { text = "Quick access"; textSize = 18f; setTextColor(white); typeface = android.graphics.Typeface.DEFAULT_BOLD; setPadding(0, 0, 0, dp(12)) })
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        val links = listOf(Triple("◎","Instagram","https://www.instagram.com"),Triple("♪","TikTok","https://www.tiktok.com"),Triple("f","Facebook","https://www.facebook.com"),Triple("𝕏","X","https://x.com"),Triple("◉","WhatsApp","https://web.whatsapp.com"))
+        links.forEach { (symbol,name,url) ->
+            val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+            item.addView(TextView(this).apply {
+                text = symbol; textSize = 25f; gravity = Gravity.CENTER
+                setTextColor(if (name == "TikTok" || name == "X") 0xFFFFFFFF.toInt() else white)
+                background = android.graphics.drawable.GradientDrawable().apply { setColor(if (name == "TikTok" || name == "X") 0xFF151515.toInt() else accent); shape = android.graphics.drawable.GradientDrawable.OVAL }
+            }, LinearLayout.LayoutParams(dp(52), dp(52)))
+            item.addView(TextView(this).apply { text = name; textSize = 10f; setTextColor(white); gravity = Gravity.CENTER; setPadding(0, dp(5), 0, 0) })
+            item.setOnClickListener { address.setText(url); openAddress() }
+            row.addView(item, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        content.addView(row)
+        val how = TextView(this).apply {
+            text = "How to download?"; textSize = 17f; gravity = Gravity.CENTER; setTextColor(orange)
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(bg); cornerRadius = dp(20).toFloat(); setStroke(dp(2), accent) }
+            setOnClickListener { android.app.AlertDialog.Builder(this@MainActivity).setTitle("How to download").setMessage("1. Open a video page in Browser.\n2. Play the video.\n3. Open Videos and choose a source.\n4. Track progress in Downloads.").setPositiveButton("OK", null).show() }
+        }
+        content.addView(how, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(22); bottomMargin = dp(22) })
+        content.addView(sectionTitle("RECENTLY DETECTED"))
+        if (found.isEmpty()) content.addView(emptyState("No videos detected yet", "Open a social video page in Browser and play a video. Detected sources will appear here.")) else addVideoCards(content)
     }
 
-    private fun showBrowser() {
+        private fun showBrowser() {
         showingBrowser = true
         content.visibility = View.GONE
         browserPanel.visibility = View.VISIBLE
@@ -261,7 +288,7 @@ class MainActivity : Activity() {
     private fun sectionTitle(value: String) = TextView(this).apply {
         text = value
         textSize = 12f
-        setTextColor(accent)
+        setTextColor(orange)
         typeface = android.graphics.Typeface.DEFAULT_BOLD
         setPadding(0, dp(18), 0, dp(8))
     }
@@ -290,8 +317,8 @@ class MainActivity : Activity() {
         text = label
         textSize = 12f
         isAllCaps = false
-        setTextColor(bg)
-        setBackgroundColor(accent)
+        setTextColor(white)
+        background = android.graphics.drawable.GradientDrawable().apply { setColor(0xFFFFC533.toInt()); cornerRadius = dp(16).toFloat() }
         setOnClickListener { click() }
     }
 
