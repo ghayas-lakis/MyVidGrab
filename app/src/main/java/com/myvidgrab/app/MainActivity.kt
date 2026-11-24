@@ -375,7 +375,7 @@ class MainActivity : Activity() {
                         mime = mime.ifBlank { previous.mime },
                         title = cleanedTitle.ifBlank { previous.title },
                         durationSec = if (duration > 0) duration else previous.durationSec,
-                        estimatedBytes = if (estimatedBytes > 0) estimatedBytes else previous.estimatedBytes
+                        estimatedBytes = if (estimatedBytes > 0) estimatedBytes else if (duration > 0 && width > 0 && height > 0) estimateVideoBytes(width, height, duration) else previous.estimatedBytes
                     )
                     detectedCount.text = "${found.size} VIDEOS"
                     if (!showingBrowser) showVideos()
@@ -388,7 +388,7 @@ class MainActivity : Activity() {
         try {
             val uri = Uri.parse(source.url)
             val request = DownloadManager.Request(uri)
-                .setTitle("MyVidGrab video")
+                .setTitle(source.title.ifBlank { "MyVidGrab video" })
                 .setDescription("Downloading video")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setAllowedOverMetered(true)
@@ -430,7 +430,6 @@ class MainActivity : Activity() {
             card.addView(TextView(this).apply { text = "${formatBytes(task.speed)}/s   •   ETA: ${formatEta(task)}   •   ${task.status}"; textSize = 12f; setTextColor(accent); setPadding(0, dp(5), 0, 0) })
             content.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
         }
-        content.addView(actionButton("OPEN ANDROID DOWNLOADS") { try { startActivity(android.content.Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)) } catch (_: Exception) { Toast.makeText(this, "Open the Downloads app on your device.", Toast.LENGTH_SHORT).show() } })
         content.addView(actionButton("OPEN DOWNLOAD MANAGER") {
             try { startActivity(android.content.Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)) }
             catch (_: Exception) { Toast.makeText(this, "Open the Downloads app on your device.", Toast.LENGTH_SHORT).show() }
@@ -471,6 +470,18 @@ class MainActivity : Activity() {
             } catch (_: Exception) { }
         }
         if (!showingBrowser && content.childCount > 0 && content.getChildAt(0) is TextView && (content.getChildAt(0) as TextView).text.toString() == "Your downloads") showDownloads()
+    }
+
+    private fun estimateVideoBytes(width: Int, height: Int, duration: Double): Long {
+        val bitrateBitsPerSecond = when {
+            height >= 2000 -> 15_000_000L
+            height >= 1400 -> 8_000_000L
+            height >= 1000 -> 5_000_000L
+            height >= 700 -> 2_500_000L
+            height >= 400 -> 1_000_000L
+            else -> 500_000L
+        }
+        return (bitrateBitsPerSecond.toDouble() * duration / 8.0).toLong().coerceAtLeast(0L)
     }
 
     private fun formatBytes(bytes: Long): String {
