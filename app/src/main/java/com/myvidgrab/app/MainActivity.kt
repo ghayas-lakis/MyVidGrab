@@ -27,7 +27,7 @@ import java.net.URLDecoder
 import java.util.Locale
 
 class MainActivity : Activity() {
-    private data class VideoSource(val url: String, val width: Int, val height: Int, val mime: String, val title: String, val durationSec: Double, val estimatedBytes: Long)
+    private data class VideoSource(val url: String, val pageUrl: String, val width: Int, val height: Int, val mime: String, val title: String, val durationSec: Double, val estimatedBytes: Long)
     private data class DownloadTask(val id: Long, val title: String, var downloaded: Long = 0L, var total: Long = -1L, var speed: Long = 0L, var lastBytes: Long = 0L, var lastTime: Long = 0L, var status: String = "Queued")
     private lateinit var browser: WebView
     private lateinit var address: EditText
@@ -350,7 +350,7 @@ class MainActivity : Activity() {
                   const entries = performance.getEntriesByName(url);
                   if (entries.length) size = entries[entries.length - 1].encodedBodySize || entries[entries.length - 1].transferSize || 0;
                 } catch(e) {}
-                try { MyVidGrab.found(url, w || 0, h || 0, mime || '', title || document.title || '', duration || 0, size || 0); } catch(e) {}
+                try { MyVidGrab.found(url, w || 0, h || 0, mime || '', title || document.title || '', duration || 0, size || 0, location.href); } catch(e) {}
               }
               function scan() {
                 try {
@@ -390,12 +390,12 @@ class MainActivity : Activity() {
 
     inner class VideoBridge {
         @JavascriptInterface
-        fun found(url: String, width: Int, height: Int, mime: String, title: String, duration: Double, estimatedBytes: Long) {
+        fun found(url: String, width: Int, height: Int, mime: String, title: String, duration: Double, estimatedBytes: Long, pageUrl: String) {
             runOnUiThread {
                 if (url.startsWith("https://") || url.startsWith("http://")) {
                     val previous = found[url]
                     val cleanedTitle = title.trim().take(140)
-                    val next = VideoSource(url, width, height, mime, cleanedTitle, duration, estimatedBytes)
+                    val next = VideoSource(url, pageUrl, width, height, mime, cleanedTitle, duration, estimatedBytes)
                     found[url] = if (previous == null) next else next.copy(
                         width = if (width > 0) width else previous.width,
                         height = if (height > 0) height else previous.height,
@@ -423,6 +423,18 @@ class MainActivity : Activity() {
             val cookie = CookieManager.getInstance().getCookie(source.url)
             if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
             request.addRequestHeader("User-Agent", browser.settings.userAgentString)
+            // Some media hosts require the page that initiated the request as its referrer.
+            // Only attach a referrer for a valid HTTP(S) page.
+            val pageUri = Uri.parse(source.pageUrl)
+            val pageScheme = pageUri.scheme?.lowercase(Locale.US)
+            val pageHost = pageUri.host
+            val mediaHost = uri.host
+            if ((pageScheme == "http" || pageScheme == "https") && !pageHost.isNullOrBlank()) {
+                request.addRequestHeader("Referer", source.pageUrl)
+                if (!mediaHost.isNullOrBlank() && pageHost.equals(mediaHost, ignoreCase = true)) {
+                    request.addRequestHeader("Origin", pageScheme + "://" + pageHost)
+                }
+            }
             val name = safeFileName(uri.lastPathSegment ?: "myvidgrab_video.mp4")
             request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name)
             val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
